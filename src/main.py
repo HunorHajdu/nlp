@@ -1,7 +1,6 @@
 from transformers import BertForSequenceClassification, Trainer, TrainingArguments
 from transformers import BertTokenizer
 from datasets import load_dataset
-import json
 
 # Load the datasets
 dataset = load_dataset('json', data_files={'train': 'datasets/train.json', 'dev': 'datasets/dev.json', 'test': 'datasets/test.json'})
@@ -10,28 +9,22 @@ dataset = load_dataset('json', data_files={'train': 'datasets/train.json', 'dev'
 tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
 # Define the new preprocess function
-def preprocess_data(entry):
-    # Extracting the relevant information from each entry
-    question = entry['question']
-    options = [entry['Option1'], entry['Option2']]
-    answer = entry['answer']
-    question_type = entry['type']
+def preprocess_data(examples):
+    # Tokenizing the questions
+    tokenized_inputs = tokenizer(examples['question'], padding='max_length', truncation=True)
     
-    # Converting the answer to a numerical label (0 or 1)
-    answer_label = options.index(answer) if answer in options else -1
+    # Converting the answers to numerical labels (0 or 1)
+    answer_labels = [options.index(answer) if answer in options else -1 for answer, options in zip(examples['answer'], zip(examples['Option1'], examples['Option2']))]
     
-    # Tokenizing the question
-    tokenized_input = tokenizer(question, padding='max_length', truncation=True)
+    # Adding the answer labels to the tokenized inputs
+    tokenized_inputs['labels'] = answer_labels
     
-    # Adding the answer label to the tokenized input
-    tokenized_input['label'] = answer_label
-    
-    return tokenized_input
+    return tokenized_inputs
 
 # Apply the new preprocess function to the datasets
 tokenized_datasets = dataset.map(preprocess_data, batched=True)
 
-# Define the model
+# Define the model with the correct number of labels
 model = BertForSequenceClassification.from_pretrained('bert-base-uncased', num_labels=2)
 
 # Define the training arguments
