@@ -11,7 +11,7 @@ with open("datasets/train.json", "r") as f:
 # select only the first 1000 samples
 data = data[:1000]
 
-should_train = False
+should_train = True
 
 # Preprocess the data
 tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
@@ -28,8 +28,9 @@ class CustomDataset(Dataset):
 
     def __getitem__(self, idx):
         item = self.data[idx]
+        masked_sentence = item['masked'].replace('[Num]', self.tokenizer.mask_token)
         inputs = self.tokenizer(
-            item['masked'],
+            masked_sentence,
             padding='max_length',
             truncation=True,
             max_length=self.max_len,
