@@ -6,16 +6,26 @@ from tqdm import tqdm
 
 # Sample data
 with open("datasets/train.json", "r") as f:
-    data = json.load(f)
+    data_train = json.load(f)
 
-# select only the first 1000 samples
-data = data[:1000]
+with open("datasets/test.json", "r") as f:
+    data_test = json.load(f)
 
-should_train = True
+with open("datasets/dev.json", "r") as f:
+    data_val = json.load(f)
+
+sample_size = None  # Number of samples to use for training, validation, and test, set to None to use all samples
+
+# Limit the number of samples to sample_size
+data_train = data_train[:sample_size]
+data_test = data_test[:sample_size]
+data_val = data_val[:sample_size]
+
+should_train = False
 
 # Preprocess the data
 tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-max_len = 128
+max_len = 512
 
 class CustomDataset(Dataset):
     def __init__(self, data, tokenizer, max_len):
@@ -47,25 +57,35 @@ class CustomDataset(Dataset):
             'actual_number': actual_number
         }
 
-# Create dataset and dataloader
-dataset = CustomDataset(data, tokenizer, max_len)
-dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
+# Create datasets and dataloaders for training, validation, and test
+train_dataset = CustomDataset(data_train, tokenizer, max_len)
+val_dataset = CustomDataset(data_val, tokenizer, max_len)
+test_dataset = CustomDataset(data_test, tokenizer, max_len)
+
+train_dataloader = DataLoader(train_dataset, batch_size=1, shuffle=True)
+val_dataloader = DataLoader(val_dataset, batch_size=1, shuffle=False)
+test_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 
 # Define the model
 model = BertForSequenceClassification.from_pretrained('bert-base-uncased', num_labels=1)
 
 # Define the optimizer
-optimizer = AdamW(model.parameters(), lr=1e-5)
-
-# Training loop
 num_epochs = 3
+validation_interval = 5
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model.to(device)
 
+optimizer = AdamW(model.parameters(), lr=1e-3)
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.1)  # Learning rate scheduler
+
 criterion = torch.nn.MSELoss()
+
 if should_train:
     for epoch in range(num_epochs):
-        progress_bar = tqdm(dataloader, desc=f'Epoch {epoch + 1}/{num_epochs}', leave=False)
+        # Training
+        model.train()
+        progress_bar = tqdm(train_dataloader, desc=f'Epoch {epoch + 1}/{num_epochs} (Training)', leave=False)
         total_loss = 0.0
 
         for batch in progress_bar:
@@ -76,7 +96,7 @@ if should_train:
 
             # Forward pass
             outputs = model(input_ids, attention_mask=attention_mask)
-            predicted_number = outputs.logits.squeeze(dim=-1)  # Adjust if necessary
+            predicted_number = outputs.logits.squeeze(dim=-1)
 
             # Calculate the loss using Mean Squared Error
             loss = criterion(predicted_number, actual_number)
@@ -90,27 +110,35 @@ if should_train:
 
             progress_bar.set_postfix({'Loss': total_loss / (len(progress_bar) + 1e-12)})
 
-        average_loss = total_loss / len(dataloader)
-        print(f'Epoch {epoch + 1}/{num_epochs}, Average Loss: {average_loss:.4f}')
+        average_loss = total_loss / len(train_dataloader)
+        print(f'Epoch {epoch + 1}/{num_epochs}, Training Loss: {average_loss:.4f}')
+        # validate the model every validation_interval epochs
+        if (epoch + 1) % validation_interval == 0:
+            # Validation
+            model.eval()
+            val_loss = 0.0
+            with torch.no_grad():
+                for val_batch in tqdm(val_dataloader, desc=f'Epoch {epoch + 1}/{num_epochs} (Validation)', leave=False):
+                    val_input_ids = val_batch['input_ids'].to(device)
+                    val_attention_mask = val_batch['attention_mask'].to(device)
+                    val_masked_number = val_batch['masked_number'].to(device)
+                    val_actual_number = val_batch['actual_number'].to(device)
 
+                    val_outputs = model(val_input_ids, attention_mask=val_attention_mask)
+                    val_predicted_number = val_outputs.logits.squeeze(dim=-1)
 
-    # Save the trained model
-    model.save_pretrained('masked_number_model')
+                    val_loss += criterion(val_predicted_number, val_actual_number).item()
+
+            average_val_loss = val_loss / len(val_dataloader)
+            print(f'Epoch {epoch + 1}/{num_epochs}, Validation Loss: {average_val_loss:.4f}')
+
+        # Adjust learning rate
+        scheduler.step()
 
 # Inference
 # Load the saved model
 loaded_model = BertForSequenceClassification.from_pretrained('masked_number_model')
 loaded_model.to(device) 
-
-with open("datasets/test.json", "r") as f:
-    test_data = json.load(f)
-
-# select only the first 1000 samples
-test_data = test_data[:1000]
-
-# Create dataset and dataloader
-test_dataset = CustomDataset(test_data, tokenizer, max_len)
-test_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=True)
 
 loaded_model.eval()
 correct_predictions = 0
